@@ -2,6 +2,11 @@
 
 ## Unreleased: `main` branch
 
+* cloud-hypervisor: the host no longer misses notify messages from the
+  guest, `READY=1` among them, which left the unit starting until its
+  timeout. Each message reached PID 1 from a socat child that had
+  already exited; one long-lived socat now sends them all (#637).
+
 * Declarative MicroVMs root their `booted` runner under
   `/nix/var/nix/gcroots/microvm/booted-<name>`, as `microvm create`
   already does for imperative ones, so garbage collection can no longer

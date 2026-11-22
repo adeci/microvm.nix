@@ -172,7 +172,7 @@ in {
 
   '' + lib.optionalString supportsNotifySocket ''
     # Ensure notify sockets are removed if cloud-hypervisor didn't exit cleanly the last time
-    rm -f ${vsockPath} ${vsockPath}_8888
+    rm -f "${vsockPath}" "${vsockPath}_8888" "${vsockPath}_relay"
 
     # Start socat to forward systemd notify socket over vsock
     if [ -n "''${NOTIFY_SOCKET:-}" ]; then
@@ -190,7 +190,25 @@ in {
       # -T0.2: with cloud-hypervisor <= 52.0 the half-close is never
       #   propagated, so only this inactivity timeout closes the connection
       #   and delivers the EOF.
-      ${pkgs.socat}/bin/socat -t0 -T0.2 UNIX-LISTEN:${vsockPath}_8888,fork UNIX-SENDTO:$NOTIFY_SOCKET &
+      #
+      # PID 1 assigns a notify message to a unit by its sender's PID, and
+      # drops it when that process has already exited (#637). The per-
+      # connection children exit right after sending, so they hand each
+      # message to one long-lived socat in this unit, which sends it on.
+      case "$NOTIFY_SOCKET" in
+        @*) notify_target="ABSTRACT-SENDTO:''${NOTIFY_SOCKET#@}" ;;
+        *)  notify_target="UNIX-SENDTO:$NOTIFY_SOCKET" ;;
+      esac
+      ${pkgs.socat}/bin/socat -u -b 65536 "UNIX-RECV:${vsockPath}_relay,mode=0600" "$notify_target" &
+      relay_pid=$!
+      while [ ! -S "${vsockPath}_relay" ]; do
+        if ! kill -0 "$relay_pid" 2>/dev/null; then
+          echo "notify relay socat exited before creating ${vsockPath}_relay" >&2
+          exit 1
+        fi
+        sleep 0.01
+      done
+      ${pkgs.socat}/bin/socat -t0 -T0.2 "UNIX-LISTEN:${vsockPath}_8888,fork,mode=0600" "UNIX-SENDTO:${vsockPath}_relay" &
     fi
   '' + lib.optionalString graphics.enable ''
     rm -f ${graphics.socket}
